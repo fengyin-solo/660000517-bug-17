@@ -1,13 +1,14 @@
 import React, { useState, useMemo } from 'react';
-import { useInterviewStore, ExecutionHistoryItem } from '../store/interview';
-import { ExecutionResult } from '../store/interview';
+import { useInterviewStore, ExecutionHistoryItem, ExecutionResult } from '../store/interview';
 
 type TestResult = NonNullable<ExecutionResult['testResults']>[number];
+type ExecutionStatus = ExecutionHistoryItem['status'];
 
 interface SubmissionResultProps {
   title: string;
   type: 'run' | 'submit';
   success: boolean;
+  status?: ExecutionStatus;
   output?: string;
   error?: string;
   runtime?: number;
@@ -705,6 +706,7 @@ export const SubmissionResult: React.FC<SubmissionResultProps> = ({
   title,
   type,
   success,
+  status,
   output,
   error,
   runtime,
@@ -717,6 +719,8 @@ export const SubmissionResult: React.FC<SubmissionResultProps> = ({
   const [activeTab, setActiveTab] = useState<'current' | 'history'>('current');
   const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
   const [compareCount, setCompareCount] = useState<number>(5);
+
+  const isRunning = status === 'running' || status === 'pending';
 
   const passedCount = testResults?.filter(t => t.passed).length || 0;
   const failedCount = testResults?.filter(t => !t.passed).length || 0;
@@ -777,24 +781,34 @@ export const SubmissionResult: React.FC<SubmissionResultProps> = ({
         alignItems: 'center',
         justifyContent: 'space-between',
         padding: '10px 16px',
-        background: success ? 'rgba(76, 175, 80, 0.1)' : 'rgba(244, 67, 54, 0.1)',
-        borderBottom: `1px solid ${success ? 'rgba(76, 175, 80, 0.3)' : 'rgba(244, 67, 54, 0.3)'}`,
+        background: isRunning ? 'rgba(33, 150, 243, 0.1)' : success ? 'rgba(76, 175, 80, 0.1)' : 'rgba(244, 67, 54, 0.1)',
+        borderBottom: `1px solid ${isRunning ? 'rgba(33, 150, 243, 0.3)' : success ? 'rgba(76, 175, 80, 0.3)' : 'rgba(244, 67, 54, 0.3)'}`,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <div style={{
             width: '24px',
             height: '24px',
             borderRadius: '50%',
-            background: getStatusBg(success),
-            border: `2px solid ${getStatusColor(success)}`,
+            background: isRunning ? 'rgba(33, 150, 243, 0.1)' : getStatusBg(success),
+            border: `2px solid ${isRunning ? '#2196f3' : getStatusColor(success)}`,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             fontSize: '14px',
-            color: getStatusColor(success),
+            color: isRunning ? '#2196f3' : getStatusColor(success),
             fontWeight: 'bold',
           }}>
-            {success ? '✓' : '✗'}
+            {isRunning ? (
+              <span style={{
+                width: '12px',
+                height: '12px',
+                border: '2px solid rgba(33, 150, 243, 0.3)',
+                borderTopColor: '#2196f3',
+                borderRadius: '50%',
+                animation: 'spin-pulse 0.8s linear infinite',
+                display: 'inline-block',
+              }} />
+            ) : success ? '✓' : '✗'}
           </div>
           <div>
             <span style={{
@@ -804,7 +818,16 @@ export const SubmissionResult: React.FC<SubmissionResultProps> = ({
             }}>
               {title}
             </span>
-            {testResults && (
+            {isRunning ? (
+              <span style={{
+                marginLeft: '8px',
+                fontSize: '12px',
+                color: '#2196f3',
+                fontWeight: 600,
+              }}>
+                正在执行，请稍候...
+              </span>
+            ) : testResults && (
               <span style={{
                 marginLeft: '8px',
                 fontSize: '12px',
@@ -854,7 +877,7 @@ export const SubmissionResult: React.FC<SubmissionResultProps> = ({
           ))}
         </div>
 
-        {type === 'submit' && testResults && activeTab === 'current' && (
+        {type === 'submit' && testResults && activeTab === 'current' && !isRunning && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: '200px' }}>
               <ProgressBar
@@ -876,7 +899,7 @@ export const SubmissionResult: React.FC<SubmissionResultProps> = ({
         )}
       </div>
 
-      {activeTab === 'current' && testResults && testResults.length > 0 && (
+      {activeTab === 'current' && testResults && testResults.length > 0 && !isRunning && (
         <div style={{
           display: 'flex',
           alignItems: 'center',
@@ -1003,7 +1026,31 @@ export const SubmissionResult: React.FC<SubmissionResultProps> = ({
       }}>
         {activeTab === 'current' && (
           <>
-            {error && (
+            {isRunning && (
+              <div style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '12px',
+                padding: '40px 20px',
+              }}>
+                <span style={{
+                  width: '28px',
+                  height: '28px',
+                  border: '3px solid rgba(33, 150, 243, 0.2)',
+                  borderTopColor: '#2196f3',
+                  borderRadius: '50%',
+                  animation: 'spin-pulse 0.8s linear infinite',
+                  display: 'inline-block',
+                }} />
+                <span style={{ color: '#2196f3', fontSize: '13px', fontWeight: 500 }}>
+                  {type === 'submit' ? '正在提交代码并执行测试用例...' : '正在运行代码...'}
+                </span>
+              </div>
+            )}
+
+            {!isRunning && error && (
               <div style={{
                 padding: '12px',
                 background: 'rgba(244, 67, 54, 0.1)',
@@ -1023,7 +1070,7 @@ export const SubmissionResult: React.FC<SubmissionResultProps> = ({
               </div>
             )}
 
-            {output && !testResults && (
+            {!isRunning && output && !testResults && (
               <div style={{
                 padding: '12px',
                 background: '#2d2d2d',
@@ -1040,7 +1087,7 @@ export const SubmissionResult: React.FC<SubmissionResultProps> = ({
               </div>
             )}
 
-            {filteredResults.length > 0 ? (
+            {!isRunning && filteredResults.length > 0 ? (
               <div>
                 {filteredResults.map((result, idx) => {
                   const originalIndex = testResults?.findIndex(t => t === result) ?? idx;
@@ -1055,7 +1102,7 @@ export const SubmissionResult: React.FC<SubmissionResultProps> = ({
                   );
                 })}
               </div>
-            ) : testResults && testResults.length > 0 ? (
+            ) : !isRunning && testResults && testResults.length > 0 ? (
               <div style={{
                 textAlign: 'center',
                 padding: '40px 20px',

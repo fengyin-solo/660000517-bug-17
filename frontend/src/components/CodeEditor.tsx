@@ -29,13 +29,9 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
     isSubmitting,
     setIsRunning,
     setIsSubmitting,
-    setLastRunResult,
-    setLastSubmissionResult,
     addExecutionHistory,
     updateExecutionHistory,
     currentProblem,
-    lastRunResult,
-    lastSubmissionResult,
     executionHistory,
   } = useInterviewStore();
 
@@ -77,27 +73,30 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
     }
   }, [code, originalCode]);
 
-  const latestSubmission = useMemo(() => {
-    return executionHistory.find(h => h.type === 'submit') || executionHistory[0];
-  }, [executionHistory]);
+  // The newest history entry is the single source of truth for the current
+  // execution. Status bar, result detail and history comparison all read it,
+  // so a fresh run/submit immediately replaces what every surface shows.
+  const latestExecution = executionHistory[0] ?? null;
 
   const submissionStatus = useMemo(() => {
-    if (!latestSubmission) return null;
-    const passRate = latestSubmission.totalCount > 0
-      ? (latestSubmission.passedCount / latestSubmission.totalCount) * 100
+    if (!latestExecution) return null;
+    const passRate = latestExecution.totalCount > 0
+      ? (latestExecution.passedCount / latestExecution.totalCount) * 100
       : 0;
-    const isSuccess = latestSubmission.passedCount === latestSubmission.totalCount && latestSubmission.totalCount > 0;
+    const isRunning = latestExecution.status === 'running' || latestExecution.status === 'pending';
+    const isSuccess = latestExecution.status === 'success';
     return {
+      isRunning,
       isSuccess,
       passRate,
-      passedCount: latestSubmission.passedCount,
-      totalCount: latestSubmission.totalCount,
-      runtime: latestSubmission.runtime,
-      memory: latestSubmission.memory,
-      timestamp: latestSubmission.timestamp,
-      type: latestSubmission.type,
+      passedCount: latestExecution.passedCount,
+      totalCount: latestExecution.totalCount,
+      runtime: latestExecution.runtime,
+      memory: latestExecution.memory,
+      timestamp: latestExecution.timestamp,
+      type: latestExecution.type,
     };
-  }, [latestSubmission]);
+  }, [latestExecution]);
 
   useEffect(() => {
     if (statusMessage) {
@@ -154,7 +153,6 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
     const pendingResult: ExecutionResult = { success: false, output: '代码运行中...' };
 
     setIsRunning(true);
-    setLastRunResult(null);
     showStatus('info', '正在运行代码...');
 
     addExecutionHistory({
@@ -177,8 +175,6 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
         result = { success: true, output: '// 模拟运行结果\nHello, World!' };
       }
 
-      setLastRunResult(result);
-
       const passedCount = result.testResults?.filter(t => t.passed).length || 0;
       const totalCount = result.testResults?.length || 0;
       const isSuccess = result.success && (totalCount === 0 || passedCount === totalCount);
@@ -199,7 +195,6 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
       }
     } catch (error) {
       const errorResult = { success: false, error: error instanceof Error ? error.message : '运行出错' };
-      setLastRunResult(errorResult);
       updateExecutionHistory(historyId, {
         result: errorResult,
         status: 'failed',
@@ -208,7 +203,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
     } finally {
       setIsRunning(false);
     }
-  }, [disabled, isRunning, isSubmitting, onRun, setIsRunning, setLastRunResult, addExecutionHistory, updateExecutionHistory, language, showStatus]);
+  }, [disabled, isRunning, isSubmitting, onRun, setIsRunning, addExecutionHistory, updateExecutionHistory, language, showStatus]);
 
   const handleSubmit = useCallback(async () => {
     if (disabled || isRunning || isSubmitting) return;
@@ -221,7 +216,6 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
     const pendingResult: ExecutionResult = { success: false, output: '代码提交中...' };
 
     setIsSubmitting(true);
-    setLastSubmissionResult(null);
     showStatus('info', '正在提交代码...');
 
     addExecutionHistory({
@@ -242,21 +236,26 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
       } else {
         await new Promise(resolve => setTimeout(resolve, 1500));
         const testCases = currentProblem?.testCases?.filter(t => !t.hidden) || [];
-        result = {
-          success: Math.random() > 0.3,
-          output: `// 模拟提交结果\n通过 ${Math.floor(Math.random() * testCases.length) + 1}/${testCases.length} 个测试用例`,
-          runtime: Math.floor(Math.random() * 80) + 20,
-          memory: Math.floor(Math.random() * 60) + 30,
-          testResults: testCases.map(t => ({
-            passed: Math.random() > 0.3,
+        // Derive success and the summary string from the same testResults so the
+        // header, pass counts and bar chart always describe one record.
+        const testResults = testCases.map(t => {
+          const passed = Math.random() > 0.3;
+          return {
+            passed,
             input: t.input,
             expected: t.expectedOutput,
-            actual: Math.random() > 0.3 ? t.expectedOutput : 'wrong_output',
-          })),
+            actual: passed ? t.expectedOutput : 'wrong_output',
+          };
+        });
+        const passedCount = testResults.filter(t => t.passed).length;
+        result = {
+          success: testResults.length > 0 && passedCount === testResults.length,
+          output: `// 模拟提交结果\n通过 ${passedCount}/${testResults.length} 个测试用例`,
+          runtime: Math.floor(Math.random() * 80) + 20,
+          memory: Math.floor(Math.random() * 60) + 30,
+          testResults,
         };
       }
-
-      setLastSubmissionResult(result);
 
       const passedCount = result.testResults?.filter(t => t.passed).length || 0;
       const totalCount = result.testResults?.length || 0;
@@ -271,14 +270,13 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
         status: isSuccess ? 'success' : 'failed',
       });
 
-      if (result.success) {
+      if (isSuccess) {
         showStatus('success', '提交成功 ✓ 所有测试用例通过');
       } else {
         showStatus('error', '提交失败 ✗ 存在未通过的测试用例');
       }
     } catch (error) {
       const errorResult = { success: false, error: error instanceof Error ? error.message : '提交出错' };
-      setLastSubmissionResult(errorResult);
       updateExecutionHistory(historyId, {
         result: errorResult,
         status: 'failed',
@@ -287,7 +285,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
     } finally {
       setIsSubmitting(false);
     }
-  }, [disabled, isRunning, isSubmitting, onSubmit, currentProblem, setIsSubmitting, setLastSubmissionResult, addExecutionHistory, updateExecutionHistory, language, showStatus]);
+  }, [disabled, isRunning, isSubmitting, onSubmit, currentProblem, setIsSubmitting, addExecutionHistory, updateExecutionHistory, language, showStatus]);
 
   const buttonBaseStyle: React.CSSProperties = {
     padding: '6px 18px',
@@ -528,9 +526,11 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
       );
     }
 
-    const statusColor = submissionStatus.isSuccess ? '#4caf50' : '#ff9800';
-    const statusBg = submissionStatus.isSuccess ? 'rgba(76, 175, 80, 0.1)' : 'rgba(255, 152, 0, 0.1)';
-    const statusBorder = submissionStatus.isSuccess ? 'rgba(76, 175, 80, 0.3)' : 'rgba(255, 152, 0, 0.3)';
+    const isRunning = submissionStatus.isRunning;
+    const statusColor = isRunning ? '#2196f3' : submissionStatus.isSuccess ? '#4caf50' : '#f44336';
+    const statusBg = isRunning ? 'rgba(33, 150, 243, 0.1)' : submissionStatus.isSuccess ? 'rgba(76, 175, 80, 0.1)' : 'rgba(244, 67, 54, 0.1)';
+    const statusBorder = isRunning ? 'rgba(33, 150, 243, 0.3)' : submissionStatus.isSuccess ? 'rgba(76, 175, 80, 0.3)' : 'rgba(244, 67, 54, 0.3)';
+    const statusLabel = isRunning ? '执行中' : submissionStatus.isSuccess ? '通过' : '未通过';
 
     return (
       <div style={{
@@ -548,14 +548,26 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
           alignItems: 'center',
           gap: '4px',
         }}>
-          <span style={{ fontSize: '14px' }}>{submissionStatus.isSuccess ? '✅' : '⏳'}</span>
+          {isRunning ? (
+            <span style={{
+              width: '12px',
+              height: '12px',
+              border: '2px solid rgba(33, 150, 243, 0.3)',
+              borderTopColor: '#2196f3',
+              borderRadius: '50%',
+              animation: 'spin 0.8s linear infinite',
+              display: 'inline-block',
+            }} />
+          ) : (
+            <span style={{ fontSize: '14px' }}>{submissionStatus.isSuccess ? '✅' : '❌'}</span>
+          )}
           <span style={{
             color: statusColor,
             fontSize: '11px',
             fontWeight: 600,
           }}>
             {submissionStatus.type === 'submit' ? '提交' : '运行'}
-            {submissionStatus.isSuccess ? '通过' : '进行中'}
+            {statusLabel}
           </span>
         </div>
 
@@ -569,14 +581,14 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
           fontFamily: 'monospace',
         }}>
           <span style={{
-            color: submissionStatus.isSuccess ? '#4caf50' : '#ff9800',
+            color: statusColor,
             fontWeight: 700,
             fontSize: '11px',
           }}>
-            {submissionStatus.passedCount}/{submissionStatus.totalCount || '-'}
+            {isRunning ? '...' : `${submissionStatus.passedCount}/${submissionStatus.totalCount || '-'}`}
           </span>
-          <span style={{ color: '#666' }}>用例</span>
-          {submissionStatus.runtime !== undefined && (
+          {!isRunning && <span style={{ color: '#666' }}>用例</span>}
+          {!isRunning && submissionStatus.runtime !== undefined && (
             <>
               <span style={{ width: '4px', height: '4px', background: '#444', borderRadius: '50%' }} />
               <span style={{ color: '#2196f3', fontWeight: 600 }}>
@@ -584,7 +596,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
               </span>
             </>
           )}
-          {submissionStatus.memory !== undefined && (
+          {!isRunning && submissionStatus.memory !== undefined && (
             <>
               <span style={{ width: '4px', height: '4px', background: '#444', borderRadius: '50%' }} />
               <span style={{ color: '#9c27b0', fontWeight: 600 }}>
@@ -597,7 +609,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
         <div style={{ width: '1px', height: '14px', background: '#444' }} />
 
         <span style={{ color: '#666', fontSize: '10px' }}>
-          {getTimeAgo(submissionStatus.timestamp)}
+          {isRunning ? '正在执行，请稍候' : getTimeAgo(submissionStatus.timestamp)}
         </span>
       </div>
     );
@@ -791,7 +803,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
       )}
 
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        <div style={{ flex: lastRunResult || lastSubmissionResult ? '0 0 60%' : '1', overflow: 'hidden', minHeight: '200px' }}>
+        <div style={{ flex: latestExecution ? '0 0 60%' : '1', overflow: 'hidden', minHeight: '200px' }}>
           <Editor
             height="100%"
             language={language}
@@ -808,32 +820,19 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
           />
         </div>
 
-        {lastSubmissionResult && (
+        {latestExecution && (
           <div style={{ flex: '0 0 40%', minHeight: '200px', display: 'flex', flexDirection: 'column' }}>
             <SubmissionResult
-              title="提交结果"
-              type="submit"
-              success={lastSubmissionResult.success}
-              output={lastSubmissionResult.output}
-              error={lastSubmissionResult.error}
-              runtime={lastSubmissionResult.runtime}
-              memory={lastSubmissionResult.memory}
-              testResults={lastSubmissionResult.testResults}
-            />
-          </div>
-        )}
-
-        {!lastSubmissionResult && lastRunResult && (
-          <div style={{ flex: '0 0 40%', minHeight: '200px', display: 'flex', flexDirection: 'column' }}>
-            <SubmissionResult
-              title="运行结果"
-              type="run"
-              success={lastRunResult.success}
-              output={lastRunResult.output}
-              error={lastRunResult.error}
-              runtime={lastRunResult.runtime}
-              memory={lastRunResult.memory}
-              testResults={lastRunResult.testResults}
+              key={latestExecution.id}
+              title={latestExecution.type === 'submit' ? '提交结果' : '运行结果'}
+              type={latestExecution.type}
+              status={latestExecution.status}
+              success={latestExecution.status === 'success'}
+              output={latestExecution.result.output}
+              error={latestExecution.result.error}
+              runtime={latestExecution.runtime}
+              memory={latestExecution.memory}
+              testResults={latestExecution.result.testResults}
             />
           </div>
         )}
